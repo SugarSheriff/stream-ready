@@ -65,9 +65,11 @@ The upper-case codes are Miris's own ingest error keys. The same code shows up w
 
 **Let the server verify the bytes.** Completion sends the spec's optional `manifest` (every file name and size), so Miris checks storage against what the client says it sent. The mock enforces it, and a test changes a file mid-upload to prove the check fires.
 
-**The API key lives in the OS vault, never in a file.** Blender's "password" fields only mask the text on screen, and the value is saved in plain text in `userpref.blend`. So the add-on has no key field at all. **Set API Key** opens a one-time dialog that writes straight to Windows Credential Manager, the macOS Keychain, or the Linux Secret Service (stdlib `ctypes` and the OS's own tools, no packages). That operator isn't registered, so Blender doesn't echo it, key included, into the Info log, and its field is marked `SKIP_SAVE`, so the dialog doesn't remember the value. If there's no vault, saving fails instead of falling back to a file. `$MIRIS_API_KEY` takes priority, so a studio can inject the key from a secrets manager.
+**Sign in with Miris, no key to copy.** The add-on signs in the way Miris's own CLI and Substance plugin do: OAuth device authorization. Click **Sign in with Miris**, approve a short code in your browser, and the grant shows up under *Account → OAuth tokens* in the portal, where it can be revoked. It asks for only the four scopes it uses (`content:submit`, `asset:read`, `assetviewerkey:write`, `customer:readself`). The public spec doesn't say how OAuth tokens are presented, so `tools/miris_login.py` checked it against the live API: `Authorization: Bearer`. Tokens refresh before they expire and once more on a 401, and **Sign Out** revokes the token on Miris as well as deleting it locally.
 
-**The key goes to one place.** The `Miris-API-Key` header is attached only to requests for the API's own origin, so storage hosts never see it (the mock records any request that leaks it, and the tests assert none do). It never appears in logs or `repr()`. The viewer key the API returns once is held in memory and copied to the clipboard on request, never saved.
+**Credentials live in the OS vault, never in a file.** Blender's "password" fields only mask the text on screen, and the value is saved in plain text in `userpref.blend`. So the add-on has no credential properties at all. Tokens go straight from the sign-in worker thread into Windows Credential Manager, the macOS Keychain, or the Linux Secret Service (stdlib `ctypes` and the OS's own tools, no packages). They're split across entries when they exceed Credential Manager's 2,560-byte limit. If there's no vault, saving fails instead of falling back to a file. Tokens are tagged with the server that issued them, so pointing the add-on at the mock server can't send it your real token. `$MIRIS_API_KEY` still works for studios and CI that have API keys.
+
+**Credentials go to one place.** Auth headers are attached only to requests for the API's own origin, so storage hosts never see them (the mock records any request that leaks one, and the tests assert none do). They never appear in logs or `repr()`. The viewer key the API returns once is held in memory and copied to the clipboard on request, never saved.
 
 **Respect the artist's Blender.** Stdlib only. Export runs on the main thread, where it has to, and the upload runs on a worker thread that never touches `bpy`. A timer redraws the panel. Cancel also cuts short any backoff wait. Blender's global *Allow Online Access* switch is honored.
 
@@ -79,19 +81,19 @@ Built from Miris's public docs and their published OpenAPI spec (`Miris Public A
 
 | | |
 |---|---|
-| ✅ Verified | Endpoint paths, methods, request and response field names, the `Miris-API-Key` header, problem+json errors, error keys, the `<miris-scene>` embed markup (from the spec and docs). Asset states `processing_preview` → `preview` and `processing_streamable` → `streamable` / `error` (from the Miris portal's filters). SigV4 (AWS test vectors). USD export, DomeLight calibration, and the OpenUSD checks (headless Blender 4.2 LTS with OpenUSD 0.24). |
+| ✅ Verified | Device sign-in with least-privilege scopes, and `Authorization: Bearer` for OAuth tokens (live, against `app.miris.com`). Endpoint paths, methods, request and response field names, the `Miris-API-Key` header, problem+json errors, error keys, the `<miris-scene>` embed markup (from the spec and docs). Asset states `processing_preview` → `preview` and `processing_streamable` → `streamable` / `error` (from the Miris portal's filters). SigV4 (AWS test vectors). USD export, DomeLight calibration, and the OpenUSD checks (headless Blender 4.2 LTS with OpenUSD 0.24). |
 | ⚠️ Assumed | `input_type` is a free string in the spec; the add-on sends `"usd"` (configurable). `content_path` is sent as the root USD's file name. `job_process_status` values aren't enumerated, so the usual done/failed spellings are recognized and anything else counts as "still processing". Storage addressing is virtual-hosted style on AWS and path style elsewhere. How Miris measures flat geometry for the volume limit isn't documented; the add-on treats it as 1 mm thick. |
 
 ## Try it
 
 ```
-python -m unittest discover -s tests                              # 54 tests, no Blender needed
+python -m unittest discover -s tests                              # 61 tests, no Blender needed
 python mock/mock_miris.py --port 8787 --api-key dev-key           # a local Miris to publish to
 ./package.ps1                                                     # builds dist/stream-ready-extension.zip
 ./tests/run_blender_smoke.ps1 -Blender "C:\path\to\blender.exe"   # end to end inside real Blender
 ```
 
-Install `dist/stream-ready-extension.zip` with *Edit → Preferences → Get Extensions → Install from Disk* (Blender 4.2+). Open the **Miris** tab in the 3D Viewport sidebar (N). To publish without an account, set the API URL in the add-on preferences to the mock server. **Export Only** writes a Miris-ready folder without needing a key.
+Install `dist/stream-ready-extension.zip` with *Edit → Preferences → Get Extensions → Install from Disk* (Blender 4.2+). Open the **Miris** tab in the 3D Viewport sidebar (N). To publish without an account, set the API URL in the add-on preferences to the mock server. **Export Only** writes a Miris-ready folder without signing in. `python tools/miris_login.py` signs in from a terminal the same way.
 
 ## What's here
 
@@ -102,13 +104,12 @@ Install `dist/stream-ready-extension.zip` with *Edit → Preferences → Get Ext
 | `stream_ready/export.py` | USD export with the guide's settings, plus the post-export fix-up. |
 | `stream_ready/core/` | No `bpy` imports: preflight rules, OpenUSD folder checks, SigV4, S3 multipart, the Miris client, and the publish flow. |
 | `mock/mock_miris.py` | A local Miris API plus S3 storage. It verifies every signature, enforces the manifest, runs the same checks as "processing", and injects 503s and 429s on request. |
-| `tests/` | 54 unit tests, plus `blender_smoke.py`: installs the zip into a sandboxed Blender, exports real USD, inspects it with `pxr`, and publishes through injected faults. |
+| `tests/` | 61 unit tests, plus `blender_smoke.py`: installs the zip into a sandboxed Blender, exports real USD, inspects it with `pxr`, and publishes through injected faults. |
 | `index.html`, `demo.css`, `demo.js` | The GitHub Pages demo. |
 
 ## Not yet
 
 - **Generate streamable from Blender.** Uploads land as a preview, like the Miris CLI's default. Turning a preview into the full streamable asset is a separate step (`miris asset generate`, or the portal), and the public REST docs don't name the endpoint, so for now the panel points you to the portal. *Skip preview* in preferences goes straight to streamable on accounts where Miris has enabled it.
-- **Sign in with a browser.** The spec has a device-authorization flow (`/v1/oauth/device/*`), and the Substance plugin signs in that way. The docs don't say which scopes to request or how the resulting token is presented, so this version uses an API key rather than guessing.
 - **Resume across Blender sessions.** Retries cover dropped requests, but quitting Blender mid-upload starts over (the CLI can resume).
 - **Animation and MaterialX.** Miris's upload API only allows `output_type: static`, so animation export is off. MaterialX networks are a one-line switch in `export.py` once there's a reason to prefer them over USD Preview Surface.
 

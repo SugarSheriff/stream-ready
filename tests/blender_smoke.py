@@ -32,7 +32,7 @@ def check(condition, message):
 def use_key(key, properties):
     # The environment route, so the smoke test never writes to the real credential vault.
     os.environ["MIRIS_API_KEY"] = key
-    properties.forget_cached_key()
+    properties.forget_cached_credential()
 
 
 def install():
@@ -251,6 +251,35 @@ def main():
     check(state.publish.status == "cancelled", f"cancel stops a publish stuck in backoff: {state.publish.status}")
     asset = next(iter(st.assets.values()), {})
     check(asset.get("status") == "canceled", "cancelled upload is marked canceled on Miris")
+    server.shutdown()
+
+    print("\n[sign in with Miris, publish, sign out]")
+    oauth = sys.modules[f"{module}.core.oauth"]
+    operators = sys.modules[f"{module}.operators"]
+    http = sys.modules[f"{module}.core.http"]
+    check(oauth.TOKEN_SERVICE.startswith("stream-ready/smoke-"), f"tokens go to a throwaway vault entry: {oauth.TOKEN_SERVICE}")
+    st = MirisState("not-used", approve_after_polls=1, log=lambda m: None)
+    server, url = serve_in_thread(st)
+    prefs.api_url = url
+    use_key("", properties)  # no environment key: the add-on must use the sign-in
+    check(properties.credential(prefs)[0] == "", "starts signed out")
+    # The operator opens a browser, which a headless test shouldn't do; drive the same
+    # worker it starts, with the same grant.
+    transport = http.Transport(timeout=5, sleep=lambda s: None)
+    operators._sign_in_worker(transport, url, oauth.start(transport, url))
+    kind, _, label = properties.credential(prefs)
+    check(kind == "oauth", f"signed in after approval: {label}")
+    check(not hasattr(state.signin, "tokens"), "tokens never held in add-on state")
+    check(bpy.ops.stream_ready.test_connection() == {"FINISHED"}, "Test Connection works with the sign-in")
+    check(bpy.ops.stream_ready.publish() == {"FINISHED"}, "publish started with the sign-in")
+    deadline = time.monotonic() + 60
+    while state.publish.running and time.monotonic() < deadline:
+        time.sleep(0.1)
+    check(state.publish.status == "preview", f"published with a bearer token: {state.publish.status}")
+    check(not st.leaked_api_key, "the bearer token never reached the storage host")
+    check(bpy.ops.stream_ready.sign_out() == {"FINISHED"}, "sign out")
+    check(not st.refresh_tokens, "sign out revoked the token on the server")
+    check(properties.credential(prefs)[0] == "" and not oauth.load_tokens(), "and deleted it from the vault")
     server.shutdown()
 
     print("\n[unregister]")

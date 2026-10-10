@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Keep the Miris API key in the operating system's credential vault, never in a file.
+"""Keep Miris credentials in the operating system's credential vault, never in a file.
 
 Blender's "password" text fields only hide the characters on screen; the value is saved
-in plain text in userpref.blend. So the add-on never stores the key in Blender at all:
+in plain text in userpref.blend. So the add-on never stores secrets in Blender at all
+(today that means the Sign in with Miris tokens, see oauth.py):
 
     Windows  Credential Manager (CredWriteW / CredReadW via ctypes; encrypted per user)
     macOS    login Keychain (the `security` tool)
@@ -13,12 +14,10 @@ available, saving fails loudly instead of quietly falling back to a plain-text f
 $MIRIS_API_KEY still works everywhere.
 """
 
-import os
 import shutil
 import subprocess
 import sys
 
-SERVICE = "stream-ready/miris-api-key"
 ACCOUNT = "default"
 
 
@@ -36,7 +35,7 @@ def backend_name():
     return None
 
 
-def save(secret, service=SERVICE):
+def save(secret, service):
     secret = (secret or "").strip()
     if not secret:
         raise KeystoreError("empty key")
@@ -48,12 +47,12 @@ def save(secret, service=SERVICE):
         return _run(["security", "add-generic-password", "-U", "-a", ACCOUNT, "-s", service, "-w", secret])
     if shutil.which("secret-tool"):
         # secret-tool reads the secret from stdin, so it never appears in a process list.
-        return _run(["secret-tool", "store", "--label=Stream Ready: Miris API key",
+        return _run(["secret-tool", "store", "--label=Stream Ready: Miris sign-in",
                      "service", service, "account", ACCOUNT], stdin=secret)
     raise KeystoreError("no credential vault found; set $MIRIS_API_KEY instead")
 
 
-def load(service=SERVICE):
+def load(service):
     """The stored key, or "" if there is none (or no vault)."""
     try:
         if sys.platform == "win32":
@@ -67,7 +66,7 @@ def load(service=SERVICE):
     return ""
 
 
-def delete(service=SERVICE):
+def delete(service):
     try:
         if sys.platform == "win32":
             _win_delete(service)
@@ -127,13 +126,48 @@ if sys.platform == "win32":
     _advapi.CredFree.argtypes = [ctypes.c_void_p]
     _advapi.CredFree.restype = None
 
+    # Credential Manager caps a blob at 2,560 bytes; OAuth tokens (JWTs, twice) can be
+    # bigger. Long values are split across "<service>#1", "#2", … with a small header.
+    CHUNK = 2048
+    CHUNK_HEADER = "stream-ready-chunks:"
+
     def _win_write(service, secret):
         blob = secret.encode("utf-8")
+        _win_delete_chunks(service)
+        if len(blob) <= CHUNK:
+            return _win_write_one(service, secret)
+        parts = [blob[i:i + CHUNK] for i in range(0, len(blob), CHUNK)]
+        for n, part in enumerate(parts, 1):
+            _win_write_one(f"{service}#{n}", None, raw=part)  # may split a UTF-8 character; joined as bytes
+        _win_write_one(service, f"{CHUNK_HEADER}{len(parts)}")
+
+    def _win_read(service):
+        head = _win_read_one(service)
+        if not head.startswith(CHUNK_HEADER):
+            return head
+        count = int(head[len(CHUNK_HEADER):])
+        return b"".join(_win_read_one(f"{service}#{n}", raw=True) for n in range(1, count + 1)).decode("utf-8")
+
+    def _win_delete(service):
+        _win_delete_chunks(service)
+        _win_delete_one(service)
+
+    def _win_delete_chunks(service):
+        try:
+            head = _win_read_one(service)
+        except KeystoreError:
+            return
+        if head.startswith(CHUNK_HEADER):
+            for n in range(1, int(head[len(CHUNK_HEADER):]) + 1):
+                _win_delete_one(f"{service}#{n}")
+
+    def _win_write_one(service, secret, raw=None):
+        blob = raw if raw is not None else secret.encode("utf-8")
         buf = (ctypes.c_ubyte * len(blob)).from_buffer_copy(blob)
         cred = _CREDENTIAL()
         cred.Type = CRED_TYPE_GENERIC
         cred.TargetName = service
-        cred.Comment = "Stream Ready (Blender): Miris API key"
+        cred.Comment = "Stream Ready (Blender): Miris sign-in"
         cred.CredentialBlobSize = len(blob)
         cred.CredentialBlob = ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte))
         cred.Persist = CRED_PERSIST_LOCAL_MACHINE
@@ -142,33 +176,23 @@ if sys.platform == "win32":
             raise KeystoreError(f"CredWriteW failed (error {ctypes.get_last_error()})")
         ctypes.memset(buf, 0, len(blob))  # don't leave a copy in this buffer
 
-    def _win_read(service):
+    def _win_read_one(service, raw=False):
         pcred = ctypes.POINTER(_CREDENTIAL)()
         if not _advapi.CredReadW(service, CRED_TYPE_GENERIC, 0, ctypes.byref(pcred)):
             err = ctypes.get_last_error()
             if err == ERROR_NOT_FOUND:
-                return ""
+                return b"" if raw else ""
             raise KeystoreError(f"CredReadW failed (error {err})")
         try:
             cred = pcred.contents
-            return ctypes.string_at(cred.CredentialBlob, cred.CredentialBlobSize).decode("utf-8")
+            data = ctypes.string_at(cred.CredentialBlob, cred.CredentialBlobSize)
+            return data if raw else data.decode("utf-8")
         finally:
             _advapi.CredFree(pcred)
 
-    def _win_delete(service):
+    def _win_delete_one(service):
         if not _advapi.CredDeleteW(service, CRED_TYPE_GENERIC, 0):
             err = ctypes.get_last_error()
             if err != ERROR_NOT_FOUND:
                 raise KeystoreError(f"CredDeleteW failed (error {err})")
 
-
-def resolve(env=None):
-    """(key, source) with $MIRIS_API_KEY first, then the vault. Never reads a file."""
-    env = os.environ if env is None else env
-    value = (env.get("MIRIS_API_KEY") or "").strip()
-    if value:
-        return value, "$MIRIS_API_KEY"
-    value = load()
-    if value:
-        return value, backend_name()
-    return "", ""

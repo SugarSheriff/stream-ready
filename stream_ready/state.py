@@ -55,3 +55,19 @@ class PublishState:
 
 
 publish = PublishState()
+
+
+class SignInState:
+    """The device-flow sign-in in progress. Holds the short user code (meant to be shown)
+    but never the tokens, which go straight from the worker thread into the OS vault."""
+
+    def __init__(self):
+        self.status = "idle"  # idle | waiting
+        self.user_code = ""
+        self.url = ""
+        self.message = ""
+        self.workspace = ""
+        self.cancel = threading.Event()
+
+
+signin = SignInState()

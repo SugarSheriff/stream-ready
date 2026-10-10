@@ -8,12 +8,12 @@ import bpy
 from bpy.props import StringProperty
 
 from . import export, snapshot, state
-from .core import bundle, keystore, preflight
+from .core import bundle, keystore, oauth, preflight
 from .core.findings import ERROR, has_errors, summarize
 from .core.http import Cancelled, HttpError, Transport
 from .core.miris import MirisClient, MirisError
 from .core.publish import publish
-from .properties import api_key, forget_cached_key
+from .properties import credential, forget_cached_credential
 
 ERROR_REFERENCE = "https://docs.miris.com/preparing-assets/error-reference"
 DOCS_URL = "https://github.com/SugarSheriff/stream-ready/blob/main/TROUBLESHOOTING.md"
@@ -25,6 +25,16 @@ EMBED = """<!-- npm i @miris-inc/components -->
 
 def _prefs(context):
     return context.preferences.addons[__package__].preferences
+
+
+def _auth(prefs, transport):
+    """(auth for MirisClient, label), or (None, "") when not signed in."""
+    kind, value, label = credential(prefs)
+    if kind == "oauth":
+        return oauth.OAuthSession(transport, prefs.api_url, value), label
+    if kind == "api_key":
+        return value, label
+    return None, ""
 
 
 def _run_preflight(context):
@@ -109,9 +119,8 @@ class STREAM_READY_OT_publish(bpy.types.Operator):
         if not getattr(bpy.app, "online_access", True):
             self.report({"ERROR"}, "Online access is off (Preferences > System > Network)")
             return {"CANCELLED"}
-        key, _ = api_key()
-        if not key:
-            self.report({"ERROR"}, "No API key: Set API Key in the add-on preferences (or use Export Only)")
+        if not credential(prefs)[0]:
+            self.report({"ERROR"}, "Not signed in: Sign in with Miris first (or use Export Only)")
             return {"CANCELLED"}
         if context.mode != "OBJECT":
             # Edit-mode changes are not flushed to mesh data until you leave edit mode.
@@ -134,7 +143,8 @@ class STREAM_READY_OT_publish(bpy.types.Operator):
         for note in report["notes"]:
             state.publish.log(note)
         transport = Transport(log=state.publish.log, cancel=state.publish.cancel)
-        client = MirisClient(transport, key, prefs.api_url, prefs.workspace.strip())
+        auth, _ = _auth(prefs, transport)
+        client = MirisClient(transport, auth, prefs.api_url, prefs.workspace.strip())
         kwargs = dict(name=name, root=report["root"], tags=tags, input_type=prefs.input_type,
                       streamable=prefs.streamable,
                       create_viewer_key=settings.create_viewer_key, log=state.publish.log,
@@ -158,67 +168,100 @@ class STREAM_READY_OT_cancel(bpy.types.Operator):
 class STREAM_READY_OT_test_connection(bpy.types.Operator):
     bl_idname = "stream_ready.test_connection"
     bl_label = "Test Connection"
-    bl_description = "Check the API URL and key with one authenticated request"
+    bl_description = "Check the sign-in with one authenticated request"
 
     def execute(self, context):
         prefs = _prefs(context)
-        key, source = api_key()
-        if not key:
-            self.report({"ERROR"}, "No API key set")
+        transport = Transport(timeout=10, max_attempts=1)
+        auth, label = _auth(prefs, transport)
+        if auth is None:
+            self.report({"ERROR"}, "Not signed in")
             return {"CANCELLED"}
-        client = MirisClient(Transport(timeout=10, max_attempts=1), key, prefs.api_url, prefs.workspace.strip())
         try:
-            info = client.customer_info()
+            info = MirisClient(transport, auth, prefs.api_url, prefs.workspace.strip()).customer_info()
         except (MirisError, HttpError) as exc:
             self.report({"ERROR"}, f"Connection failed: {exc}")
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Connected to {info.get('name') or 'Miris'} (key from {source})")
+        state.signin.workspace = info.get("name") or ""
+        self.report({"INFO"}, f"Connected to {info.get('name') or 'Miris'} ({label})")
         return {"FINISHED"}
 
 
-class STREAM_READY_OT_set_api_key(bpy.types.Operator):
-    bl_idname = "stream_ready.set_api_key"
-    bl_label = "Set API Key"
-    bl_description = "Save a Miris API key in your operating system's credential vault (never in Blender files)"
-    # No REGISTER: registered operators are echoed, arguments and all, into Blender's Info
-    # log and Python console history. INTERNAL also keeps it out of the F3 search.
-    bl_options = {"INTERNAL"}
+class STREAM_READY_OT_sign_in(bpy.types.Operator):
+    bl_idname = "stream_ready.sign_in"
+    bl_label = "Sign in with Miris"
+    bl_description = ("Approve this add-on in your browser, the way Miris's own plugins sign in. "
+                      "No password or key is typed into Blender")
 
-    # SKIP_SAVE: Blender would otherwise remember the last value typed into this dialog.
-    key: StringProperty(name="API key", subtype="PASSWORD", options={"SKIP_SAVE"})
-
-    def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self, width=420)
-
-    def draw(self, context):
-        layout = self.layout
-        layout.prop(self, "key")
-        layout.label(text=f"Saved to {keystore.backend_name() or 'nowhere: no vault found'}.", icon="LOCKED")
-        layout.label(text="Create keys in the Miris portal. Revoke there if one ever leaks.")
+    @classmethod
+    def poll(cls, context):
+        return state.signin.status != "waiting"
 
     def execute(self, context):
-        try:
-            keystore.save(self.key)
-        except keystore.KeystoreError as exc:
-            self.report({"ERROR"}, f"Could not save the key: {exc}")
+        prefs = _prefs(context)
+        if not getattr(bpy.app, "online_access", True):
+            self.report({"ERROR"}, "Online access is off (Preferences > System > Network)")
             return {"CANCELLED"}
-        finally:
-            self.key = ""
-        forget_cached_key()
-        self.report({"INFO"}, f"API key saved to {keystore.backend_name()}")
+        signin = state.signin
+        signin.cancel = threading.Event()
+        transport = Transport(timeout=15, cancel=signin.cancel)
+        try:
+            grant = oauth.start(transport, prefs.api_url)
+        except (MirisError, HttpError) as exc:
+            self.report({"ERROR"}, f"Could not start sign-in: {exc}")
+            return {"CANCELLED"}
+        signin.status, signin.user_code, signin.url, signin.message = "waiting", grant["user_code"], grant["verification_uri"], ""
+        bpy.ops.wm.url_open(url=grant["verification_uri"])
+        threading.Thread(target=_sign_in_worker, args=(transport, prefs.api_url, grant),
+                         name="stream-ready-sign-in", daemon=True).start()
+        bpy.app.timers.register(_redraw_while_signing_in, first_interval=0.5)
+        self.report({"INFO"}, f"Approve code {grant['user_code']} in your browser")
         return {"FINISHED"}
 
 
-class STREAM_READY_OT_clear_api_key(bpy.types.Operator):
-    bl_idname = "stream_ready.clear_api_key"
-    bl_label = "Remove"
-    bl_description = "Delete the saved API key from the credential vault"
-    bl_options = {"INTERNAL"}
+class STREAM_READY_OT_open_signin_page(bpy.types.Operator):
+    bl_idname = "stream_ready.open_signin_page"
+    bl_label = "Open Approval Page"
+    bl_description = "Open the Miris approval page again"
 
     def execute(self, context):
-        keystore.delete()
-        forget_cached_key()
-        self.report({"INFO"}, "API key removed")
+        if state.signin.url:
+            bpy.ops.wm.url_open(url=state.signin.url)
+        return {"FINISHED"}
+
+
+class STREAM_READY_OT_cancel_sign_in(bpy.types.Operator):
+    bl_idname = "stream_ready.cancel_sign_in"
+    bl_label = "Cancel"
+    bl_description = "Stop waiting for approval"
+
+    def execute(self, context):
+        state.signin.cancel.set()
+        return {"FINISHED"}
+
+
+class STREAM_READY_OT_sign_out(bpy.types.Operator):
+    bl_idname = "stream_ready.sign_out"
+    bl_label = "Sign Out"
+    bl_description = "Revoke this add-on's token on Miris and delete it from this computer"
+
+    def execute(self, context):
+        prefs = _prefs(context)
+        tokens = oauth.load_tokens(base_url=prefs.api_url)
+        revoked = False
+        if tokens and tokens.get("refresh_token"):
+            try:
+                oauth.revoke(Transport(timeout=10, max_attempts=2), prefs.api_url, tokens)
+                revoked = True
+            except (MirisError, HttpError):
+                pass
+        oauth.forget_tokens()
+        forget_cached_credential()
+        state.signin.workspace = ""
+        if revoked:
+            self.report({"INFO"}, "Signed out; the token was revoked on Miris")
+        else:
+            self.report({"WARNING"}, "Signed out locally. Also remove it under Account > OAuth tokens in the Miris portal")
         return {"FINISHED"}
 
 
@@ -319,15 +362,45 @@ def _worker(client, folder, files, kwargs):
     shutil.rmtree(os.path.dirname(folder), ignore_errors=True)
 
 
-def _redraw_while_running():
+def _sign_in_worker(transport, base_url, grant):
+    # Runs off the main thread: no bpy calls. The tokens go straight into the OS vault and
+    # are never put in shared state, a log line, or an exception message.
+    signin = state.signin
+    try:
+        tokens = oauth.wait_for_approval(transport, base_url, grant)
+        oauth.save_tokens(tokens)
+        signin.message = ""
+    except Cancelled:
+        signin.message = "Sign-in cancelled"
+    except (MirisError, HttpError, keystore.KeystoreError) as exc:
+        signin.message = f"Sign-in failed: {exc}"
+    except Exception as exc:  # a worker that dies silently is worse than a noisy one
+        signin.message = f"Sign-in failed: {exc!r}"
+    finally:
+        forget_cached_credential()
+        signin.status, signin.user_code, signin.url = "idle", "", ""
+
+
+def _redraw_all():
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
-            if area.type == "VIEW_3D":
+            if area.type in {"VIEW_3D", "PREFERENCES"}:
                 area.tag_redraw()
+
+
+def _redraw_while_running():
+    _redraw_all()
     return 0.25 if state.publish.running else None
+
+
+def _redraw_while_signing_in():
+    _redraw_all()
+    return 0.5 if state.signin.status == "waiting" else None
 
 
 def shutdown():
     state.publish.cancel.set()
-    if bpy.app.timers.is_registered(_redraw_while_running):
-        bpy.app.timers.unregister(_redraw_while_running)
+    state.signin.cancel.set()
+    for timer in (_redraw_while_running, _redraw_while_signing_in):
+        if bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)

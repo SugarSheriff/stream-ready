@@ -2,24 +2,48 @@
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 
-from .core import keystore
+from . import state
+from .core import keystore, oauth
 from .core.miris import DEFAULT_BASE_URL, DEFAULT_INPUT_TYPE
 
-_cached = None  # (key, source); panels redraw constantly, the vault shouldn't be hit each time
+_cached = {}  # api_url -> (kind, value, label); panels redraw constantly, the vault shouldn't be hit each time
 
 
-def api_key():
-    """(key, where it came from): $MIRIS_API_KEY first, then the OS credential vault.
-    The key is never stored in Blender preferences or the .blend file."""
-    global _cached
-    if _cached is None:
-        _cached = keystore.resolve()
-    return _cached
+def credential(prefs):
+    """("oauth", tokens, label), ("api_key", key, label), or ("", None, ""), for the
+    configured API URL. Nothing here is ever stored in Blender preferences or a .blend."""
+    if prefs.api_url not in _cached:
+        _cached[prefs.api_url] = oauth.credential(prefs.api_url)
+    return _cached[prefs.api_url]
 
 
-def forget_cached_key():
-    global _cached
-    _cached = None
+def forget_cached_credential():
+    _cached.clear()
+
+
+def draw_account(box, prefs):
+    """Sign-in status and buttons; shared by the preferences and the sidebar panel."""
+    signin = state.signin
+    if signin.status == "waiting":
+        box.label(text=f"Approve code {signin.user_code} in your browser…", icon="SORTTIME")
+        row = box.row(align=True)
+        row.operator("stream_ready.open_signin_page", icon="URL")
+        row.operator("stream_ready.cancel_sign_in", icon="X")
+        return
+    kind, _, label = credential(prefs)
+    if kind:
+        box.label(text=label + (f" · {signin.workspace}" if signin.workspace else ""), icon="LOCKED")
+        row = box.row(align=True)
+        row.operator("stream_ready.test_connection", icon="URL")
+        if kind == "oauth":
+            row.operator("stream_ready.sign_out", icon="X")
+    else:
+        if signin.message:
+            box.label(text=signin.message, icon="ERROR")
+        if keystore.backend_name():
+            box.operator("stream_ready.sign_in", icon="USER")
+        else:
+            box.label(text="No credential vault on this system: set $MIRIS_API_KEY", icon="UNLOCKED")
 
 
 class StreamReadyPreferences(bpy.types.AddonPreferences):
@@ -31,10 +55,11 @@ class StreamReadyPreferences(bpy.types.AddonPreferences):
         description="Miris API base URL. Point it at mock/mock_miris.py to try the add-on without an account",
         default=DEFAULT_BASE_URL,
     )
-    # No API key property on purpose: see core/keystore.py and STREAM_READY_OT_set_api_key.
+    # No API key or token property on purpose: Blender saves every preference as plain
+    # text in userpref.blend. Credentials live in the OS vault (core/keystore.py).
     workspace: StringProperty(
         name="Workspace",
-        description="Optional workspace (customer UUID). Empty uses the key's default workspace",
+        description="Optional workspace (customer UUID). Empty uses the one you signed in to",
     )
     input_type: StringProperty(
         name="Input type",
@@ -56,20 +81,7 @@ class StreamReadyPreferences(bpy.types.AddonPreferences):
     def draw(self, context):
         col = self.layout.column()
         col.prop(self, "api_url")
-        _, source = api_key()
-        box = col.box()
-        if source:
-            box.label(text=f"API key stored in {source}", icon="LOCKED")
-        else:
-            vault = keystore.backend_name()
-            box.label(text=f"No API key. Saved keys go to {vault}" if vault
-                      else "No API key, and no credential vault found: set $MIRIS_API_KEY", icon="UNLOCKED")
-        row = box.row(align=True)
-        row.operator("stream_ready.set_api_key", icon="KEY_HLT")
-        sub = row.row(align=True)
-        sub.enabled = source not in ("", "$MIRIS_API_KEY")
-        sub.operator("stream_ready.clear_api_key", icon="TRASH")
-        row.operator("stream_ready.test_connection", icon="URL")
+        draw_account(col.box(), self)
         col.prop(self, "workspace")
         col.separator()
         col.prop(self, "streamable")

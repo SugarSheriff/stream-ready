@@ -16,6 +16,8 @@ $env:BLENDER_USER_CONFIG = Join-Path $sandbox 'config'
 $env:BLENDER_USER_SCRIPTS = Join-Path $sandbox 'scripts'
 $env:BLENDER_USER_EXTENSIONS = Join-Path $sandbox 'extensions'
 $env:MIRIS_API_KEY = ''  # the smoke test sets its own key; never pick up a real one
+# Sign-in tokens go to a throwaway vault entry, never the real "stream-ready/miris-oauth".
+$env:STREAM_READY_TOKEN_SERVICE = "stream-ready/smoke-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
 
 try {
     # Blender prints Python warnings to stderr; don't let PowerShell treat them as fatal.

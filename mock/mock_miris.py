@@ -27,6 +27,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -43,8 +44,17 @@ AUTH_RE = re.compile(r"AWS4-HMAC-SHA256 Credential=([^/]+)/(\d{8})/([^/]+)/s3/aw
 
 class MirisState:
     def __init__(self, api_key="dev-key", *, region="us-west-2", fail_api=0, throttle_storage=0,
-                 retry_after=0, processing_polls=2, log=None):
+                 retry_after=0, processing_polls=2, approve_after_polls=1, deny=False,
+                 access_ttl=3600, log=None):
         self.api_key = api_key
+        # Device sign-in: the "artist" approves after N polls (or denies).
+        self.approve_after_polls = approve_after_polls
+        self.deny = deny
+        self.access_ttl = access_ttl  # seconds; tokens issued with this expires_in
+        self.grants = {}  # device_code -> {"user_code", "polls", "scopes"}
+        self.access_tokens = {}  # token -> {"expires": epoch, "scopes"}
+        self.refresh_tokens = {}  # token -> scopes
+        self.refreshes = 0
         self.region = region
         self.fail_api = fail_api  # first N API calls answer 503
         self.throttle_storage = throttle_storage  # first N storage writes answer 429 + Retry-After
@@ -104,8 +114,10 @@ def _handler(state):
                 self._problem(500, "mock_bug", f"mock server error: {exc!r}")
 
         def _api(self, method, path):
-            if self.headers.get("Miris-API-Key") != state.api_key:
-                return self._problem(401, "invalid_api_key", "Unauthorized", "The API key is missing or invalid.")
+            if path.startswith("/v1/oauth/") and method == "POST":
+                return self._oauth(path)
+            if not self._authorized():
+                return self._problem(401, "invalid_api_key", "Unauthorized", "The credentials are missing or invalid.")
             with state.lock:
                 if state.fail_api > 0:
                     state.fail_api -= 1
@@ -125,6 +137,54 @@ def _handler(state):
             if method == "POST" and path == "/v1/asset-viewer-key":
                 return self._viewer_key()
             return self._problem(404, "not_found", "Not Found")
+
+        # --- auth -------------------------------------------------------------------
+
+        def _authorized(self):
+            if self.headers.get("Miris-API-Key") == state.api_key:
+                return True
+            auth = self.headers.get("Authorization") or ""
+            if auth.startswith("Bearer "):  # verified against the live API: OAuth tokens go here
+                token = state.access_tokens.get(auth[7:])
+                return bool(token) and token["expires"] > time.time()
+            return False
+
+        def _oauth(self, path):
+            body = self._body_json()
+            if path == "/v1/oauth/device/start":
+                if not body.get("scopes"):
+                    return self._problem(400, "missing_scopes", "Bad Request", "scopes are required")
+                device_code, user_code = secrets.token_urlsafe(24), f"{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}"
+                state.grants[device_code] = {"user_code": user_code, "polls": 0, "scopes": body["scopes"]}
+                return self._json(200, {"device_code": device_code, "user_code": user_code, "expires_in": 600,
+                                        "interval": 1, "verification_uri": f"{state.base_url}/oauth/authorize?oauth_user_code={user_code}"})
+            if path == "/v1/oauth/device/poll":
+                grant = state.grants.get(body.get("device_code"))
+                if not grant:
+                    return self._json(200, {"error": "expired_token"})
+                grant["polls"] += 1
+                if state.deny:
+                    return self._json(200, {"error": "access_denied"})
+                if grant["polls"] <= state.approve_after_polls:
+                    return self._json(200, {"error": "authorization_pending"})
+                del state.grants[body["device_code"]]
+                return self._json(200, self._issue(grant["scopes"]))
+            if path == "/v1/oauth/token/refresh":
+                scopes = state.refresh_tokens.pop(body.get("refresh_token"), None)
+                if scopes is None:
+                    return self._problem(401, "invalid_refresh_token", "Unauthorized")
+                state.refreshes += 1
+                return self._json(200, self._issue(scopes))
+            if path == "/v1/oauth/token/revoke":
+                state.refresh_tokens.pop(body.get("refresh_token"), None)
+                return self._raw(200, b"")
+            return self._problem(404, "not_found", "Not Found")
+
+        def _issue(self, scopes):
+            access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+            state.access_tokens[access] = {"expires": time.time() + state.access_ttl, "scopes": scopes}
+            state.refresh_tokens[refresh] = scopes
+            return {"access_token": access, "refresh_token": refresh, "expires_in": state.access_ttl, "token_type": "Bearer"}
 
         # --- API endpoints ------------------------------------------------------------
 
@@ -257,7 +317,8 @@ def _handler(state):
         def _storage(self, method, parts):
             with state.lock:
                 state.storage_requests += 1
-                if self.headers.get("Miris-API-Key") or self.headers.get("Miris-Integration-Key"):
+                if (self.headers.get("Miris-API-Key") or self.headers.get("Miris-Integration-Key")
+                        or (self.headers.get("Authorization") or "").startswith("Bearer ")):
                     state.leaked_api_key = True
             asset, error = self._verify_sigv4(method, parts)
             if error:

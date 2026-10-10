@@ -5,7 +5,7 @@ import bpy
 
 from . import state
 from .core.findings import ERROR, WARN
-from .properties import api_key
+from .properties import draw_account
 
 SEVERITY_ICON = {ERROR: "CANCEL", WARN: "ERROR", "info": "INFO"}
 STATUS_ICON = {"ready": "CHECKMARK", "preview": "HIDE_OFF", "processing": "SORTTIME", "rejected": "CANCEL",
@@ -52,12 +52,7 @@ class STREAM_READY_PT_main(_MirisPanel, bpy.types.Panel):
         layout.prop(settings, "asset_name")
         layout.prop(settings, "tags")
         layout.row().prop(settings, "scope", expand=True)
-        _, source = api_key()
-        row = layout.row()
-        row.label(text=f"API key from {source}" if source else "No API key: Export Only",
-                  icon="LOCKED" if source else "UNLOCKED")
-        if not source:
-            row.operator("stream_ready.set_api_key", text="", icon="KEY_HLT")
+        draw_account(layout.box(), context.preferences.addons[__package__].preferences)
 
 
 class STREAM_READY_PT_preflight(_MirisPanel, bpy.types.Panel):
