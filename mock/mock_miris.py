@@ -49,7 +49,7 @@ class MirisState:
         self.fail_api = fail_api  # first N API calls answer 503
         self.throttle_storage = throttle_storage  # first N storage writes answer 429 + Retry-After
         self.retry_after = retry_after  # seconds, sent with every 429/503
-        self.processing_polls = processing_polls  # GETs before a valid asset turns streamable
+        self.processing_polls = processing_polls  # GETs before a valid asset finishes processing
         self.log = log or (lambda msg: print(msg, flush=True))
         self.lock = threading.Lock()
         self.assets = {}
@@ -149,6 +149,8 @@ def _handler(state):
                 "job_process_status": "pending",
                 "job_errors": None,
                 "polls_left": state.processing_polls,
+                # Like the real service: a preview unless the upload asks to skip it.
+                "streamable": bool(body.get("streamable")),
                 "created_at": _now(),
             }
             with state.lock:
@@ -222,16 +224,17 @@ def _handler(state):
                                        for f in errors]
             else:
                 asset["job_process_status"] = "processing"
-                asset["state"] = "processing_streamable"
+                asset["state"] = "processing_streamable" if asset["streamable"] else "processing_preview"
 
         def _asset(self, asset_id):
             asset = state.assets.get(asset_id)
             if not asset:
                 return self._problem(404, "asset_not_found", "Not Found")
-            if asset["state"] == "processing_streamable":
+            if asset["state"].startswith("processing_"):
                 asset["polls_left"] -= 1
                 if asset["polls_left"] <= 0:
-                    asset["state"], asset["job_process_status"] = "streamable", "completed"
+                    asset["state"] = "streamable" if asset["streamable"] else "preview"
+                    asset["job_process_status"] = "completed"
             self._json(200, {
                 "id": asset_id, "name": asset["name"], "tags": asset["tags"], "is_published": False,
                 "created_at": asset["created_at"], "updated_at": _now(), "state": asset["state"],

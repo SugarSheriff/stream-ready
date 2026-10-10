@@ -215,7 +215,7 @@
       stage('complete', 'done');
 
       stage('process', 'active');
-      log(`GET /v1/asset/all/${id.slice(0, 8)}…  state=processing_streamable job=processing`, 'req');
+      log(`GET /v1/asset/all/${id.slice(0, 8)}…  state=processing_preview job=processing`, 'req');
       await sleep(900);
       const rejected = sceneErrors.filter((x) => x.miris);
       if (rejected.length) {
@@ -227,8 +227,8 @@
         skipRest('process');
         return;
       }
-      log(`GET /v1/asset/all/${id.slice(0, 8)}…  state=streamable job=completed`, 'req');
-      log('asset ready (streamable)', 'ok');
+      log(`GET /v1/asset/all/${id.slice(0, 8)}…  state=preview job=completed`, 'req');
+      log('preview ready; generate the streamable version from the Miris portal', 'ok');
       stage('process', 'done');
 
       stage('share', 'active');

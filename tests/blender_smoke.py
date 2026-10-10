@@ -219,7 +219,7 @@ def main():
     for line in state.publish.lines():
         print("        " + line)
     result = state.publish.result or {}
-    check(state.publish.status == "ready", f"publish finished streamable: {state.publish.status}")
+    check(state.publish.status == "preview", f"publish finished as a preview, like the Miris portal: {state.publish.status}")
     check(bool((result.get("viewer_key") or {}).get("key")), "share key created and held in memory")
     check(not st.leaked_api_key, "API key never sent to the storage host")
     uploaded = sorted(k.split("/", 2)[2] for (_, k) in st.objects)

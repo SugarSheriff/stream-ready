@@ -36,8 +36,9 @@ class PublishAgainstMock(unittest.TestCase):
         progress = []
         result = self.publish(client, good_folder(), create_viewer_key=True,
                               progress=lambda done, total: progress.append((done, total)))
-        self.assertEqual(result["status"], "ready")
-        self.assertEqual(result["state"], "streamable")
+        # A normal upload ends as a preview, as in the Miris portal.
+        self.assertEqual(result["status"], "preview")
+        self.assertEqual(result["state"], "preview")
         self.assertEqual(result["files"], 2)
         self.assertEqual(progress[-1][0], progress[-1][1])
         asset = self.state.assets[result["asset_id"]]
@@ -46,6 +47,11 @@ class PublishAgainstMock(unittest.TestCase):
         key = result["viewer_key"]
         self.assertTrue(key["key"].startswith(key["prefix"]))
         self.assertEqual(self.state.viewer_keys[key["id"]]["asset_ids"], [result["asset_id"]])
+
+    def test_skip_preview_goes_straight_to_streamable(self):
+        client = self.start()
+        result = self.publish(client, good_folder(), streamable=True)
+        self.assertEqual((result["status"], result["state"]), ("ready", "streamable"))
 
     def test_api_key_never_reaches_storage_or_the_log(self):
         client = self.start()
@@ -60,7 +66,7 @@ class PublishAgainstMock(unittest.TestCase):
         big = bytes(range(256)) * 4096 * 3  # 3 MiB
         folder = make_folder({"chair.usda": usda(texture="./textures/big.png"), "textures/big.png": big})
         result = self.publish(client, folder, uploader_options={"threshold": 1 << 20, "part_size": 1 << 20})
-        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["status"], "preview")
         asset = self.state.assets[result["asset_id"]]
         self.assertEqual(self.state.objects[("mock-bucket", asset["prefix"] + "textures/big.png")], big)
         self.assertIn("uploaded textures/big.png (3.0 MB)", "\n".join(self.lines))
@@ -68,7 +74,7 @@ class PublishAgainstMock(unittest.TestCase):
     def test_retries_through_api_503s_and_storage_throttling(self):
         client = self.start(fail_api=2, throttle_storage=2)
         result = self.publish(client, good_folder())
-        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["status"], "preview")
         log = "\n".join(self.lines)
         self.assertIn("POST /v1/asset -> 503", log)
         self.assertIn("429 SlowDown", log)

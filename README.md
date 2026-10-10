@@ -1,6 +1,6 @@
 # Stream Ready
 
-A Blender add-on that gets a scene ready for [Miris](https://www.miris.com) 3D streaming and publishes it: preflight against Miris's own error codes, a correctly configured OpenUSD export, a check of the exported files, a SigV4-signed upload to the Miris REST API, and a watch on processing until the asset is streamable.
+A Blender add-on that gets a scene ready for [Miris](https://www.miris.com) 3D streaming and publishes it: preflight against Miris's own error codes, a correctly configured OpenUSD export, a check of the exported files, a SigV4-signed upload to the Miris REST API, and a watch on processing until the preview (or, on accounts that allow skipping it, the streamable asset) is ready.
 
 **[Live demo →](https://sugarsheriff.github.io/stream-ready/)** · an interactive walkthrough of the panel and the publish flow, with toggleable scene problems and network faults
 
@@ -77,7 +77,7 @@ Built from Miris's public docs and their published OpenAPI spec (`Miris Public A
 
 | | |
 |---|---|
-| ✅ Verified | Endpoint paths, methods, request and response field names, the `Miris-API-Key` header, problem+json errors, error keys, the `<miris-scene>` embed markup (from the spec and docs). SigV4 (AWS test vectors). USD export, DomeLight calibration, and the OpenUSD checks (headless Blender 4.2 LTS with OpenUSD 0.24). |
+| ✅ Verified | Endpoint paths, methods, request and response field names, the `Miris-API-Key` header, problem+json errors, error keys, the `<miris-scene>` embed markup (from the spec and docs). Asset states `processing_preview` → `preview` and `processing_streamable` → `streamable` / `error` (from the Miris portal's filters). SigV4 (AWS test vectors). USD export, DomeLight calibration, and the OpenUSD checks (headless Blender 4.2 LTS with OpenUSD 0.24). |
 | ⚠️ Assumed | `input_type` is a free string in the spec; the add-on sends `"usd"` (configurable). `content_path` is sent as the root USD's file name. `job_process_status` values aren't enumerated, so the usual done/failed spellings are recognized and anything else counts as "still processing". Storage addressing is virtual-hosted style on AWS and path style elsewhere. How Miris measures flat geometry for the volume limit isn't documented; the add-on treats it as 1 mm thick. |
 
 ## Try it
@@ -105,6 +105,7 @@ Install `dist/stream-ready-extension.zip` with *Edit → Preferences → Get Ext
 
 ## Not yet
 
+- **Generate streamable from Blender.** Uploads land as a preview, like the Miris CLI's default. Turning a preview into the full streamable asset is a separate step (`miris asset generate`, or the portal), and the public REST docs don't name the endpoint, so for now the panel points you to the portal. *Skip preview* in preferences goes straight to streamable on accounts where Miris has enabled it.
 - **Sign in with a browser.** The spec has a device-authorization flow (`/v1/oauth/device/*`), and the Substance plugin signs in that way. The docs don't say which scopes to request or how the resulting token is presented, so this version uses an API key rather than guessing.
 - **Resume across Blender sessions.** Retries cover dropped requests, but quitting Blender mid-upload starts over (the CLI can resume).
 - **Animation and MaterialX.** Miris's upload API only allows `output_type: static`, so animation export is off. MaterialX networks are a one-line switch in `export.py` once there's a reason to prefer them over USD Preview Surface.

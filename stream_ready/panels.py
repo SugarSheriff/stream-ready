@@ -8,9 +8,10 @@ from .core.findings import ERROR, WARN
 from .properties import api_key
 
 SEVERITY_ICON = {ERROR: "CANCEL", WARN: "ERROR", "info": "INFO"}
-STATUS_ICON = {"ready": "CHECKMARK", "processing": "SORTTIME", "rejected": "CANCEL", "failed": "CANCEL",
-               "cancelled": "X", "running": "SORTTIME"}
-STATUS_TEXT = {"ready": "Streamable on Miris", "processing": "Uploaded; still processing on Miris",
+STATUS_ICON = {"ready": "CHECKMARK", "preview": "HIDE_OFF", "processing": "SORTTIME", "rejected": "CANCEL",
+               "failed": "CANCEL", "cancelled": "X", "running": "SORTTIME"}
+STATUS_TEXT = {"ready": "Streamable on Miris", "preview": "Preview ready: generate streamable in the portal",
+               "processing": "Uploaded; still processing on Miris",
                "rejected": "Rejected by Miris", "failed": "Failed", "cancelled": "Cancelled", "running": "Publishing"}
 
 

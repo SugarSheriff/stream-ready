@@ -48,7 +48,7 @@ class MirisClient:
         return self._json("GET", "/v1/customer_info")
 
     def start_upload(self, *, name, content_path, file_count, total_bytes, tags=None,
-                     input_type=DEFAULT_INPUT_TYPE):
+                     input_type=DEFAULT_INPUT_TYPE, streamable=False):
         """POST /v1/asset -> ContentUploadStartResponse (upload id + scoped storage credentials)."""
         body = {
             "name": name,
@@ -60,6 +60,8 @@ class MirisClient:
         }
         if tags:
             body["tags"] = list(tags)
+        if streamable:  # skip the preview; the spec says this needs an account entitlement
+            body["streamable"] = True
         start = self._json("POST", "/v1/asset", body)
         missing = [k for k in ("id", "endpoint_url", "access_key_id", "secret_key", "session_token", "upload_path")
                    if not start.get(k)]

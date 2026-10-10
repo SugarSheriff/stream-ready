@@ -136,6 +136,7 @@ class STREAM_READY_OT_publish(bpy.types.Operator):
         transport = Transport(log=state.publish.log, cancel=state.publish.cancel)
         client = MirisClient(transport, key, prefs.api_url, prefs.workspace.strip())
         kwargs = dict(name=name, root=report["root"], tags=tags, input_type=prefs.input_type,
+                      streamable=prefs.streamable,
                       create_viewer_key=settings.create_viewer_key, log=state.publish.log,
                       progress=state.publish.progress, poll_timeout=prefs.poll_timeout)
         threading.Thread(target=_worker, args=(client, folder, report["files"], kwargs),

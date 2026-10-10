@@ -46,6 +46,12 @@ class StreamReadyPreferences(bpy.types.AddonPreferences):
         description="input_type sent with each upload (advanced)",
         default=DEFAULT_INPUT_TYPE,
     )
+    streamable: BoolProperty(
+        name="Skip preview",
+        description="Process straight to streamable instead of a preview first. "
+                    "Only works if Miris has enabled it on your account",
+        default=False,
+    )
     poll_timeout: FloatProperty(
         name="Wait for processing (s)",
         description="How long to watch processing before handing off to the Miris portal",
@@ -64,6 +70,7 @@ class StreamReadyPreferences(bpy.types.AddonPreferences):
         col.prop(self, "workspace")
         col.operator("stream_ready.test_connection", icon="URL")
         col.separator()
+        col.prop(self, "streamable")
         col.prop(self, "poll_timeout")
         col.prop(self, "input_type")
 

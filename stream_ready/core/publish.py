@@ -18,22 +18,24 @@ from .findings import from_server
 from .http import Cancelled
 from .storage import Credentials, S3Uploader, parse_upload_path
 
-# ASSUMPTION: the spec types job_process_status as a free string. These cover the usual
-# spellings; anything else is treated as "still working" until the poll timeout.
+# Asset states, as the Miris portal filters them: processing_preview, preview,
+# processing_streamable, streamable, error. ASSUMPTION: the spec types
+# job_process_status as a free string. These cover the usual spellings; anything else
+# is treated as "still working" until the poll timeout.
 DONE_STATES = {"completed", "complete", "succeeded", "success", "done", "finished"}
 FAILED_STATES = {"failed", "error", "errored", "canceled", "cancelled", "rejected"}
 
 
-def publish(client, folder, files, *, name, root, tags=(), input_type="usd", create_viewer_key=False,
-            log=None, progress=None, poll_interval=3.0, poll_timeout=600.0, uploader_options=None,
-            clock=time.monotonic):
+def publish(client, folder, files, *, name, root, tags=(), input_type="usd", streamable=False,
+            create_viewer_key=False, log=None, progress=None, poll_interval=3.0, poll_timeout=600.0,
+            uploader_options=None, clock=time.monotonic):
     log = log or (lambda msg: None)
     transport = client.transport
     total = sum(size for _, size in files)
     log(f"{len(files)} file(s), {_fmt_bytes(total)}")
 
     start = client.start_upload(name=name, content_path=root, file_count=len(files),
-                                total_bytes=total, tags=tags, input_type=input_type)
+                                total_bytes=total, tags=tags, input_type=input_type, streamable=streamable)
     asset_id = start["id"]
     log(f"asset {asset_id} reserved")
 
@@ -96,14 +98,20 @@ def _poll(client, asset_id, result, log, interval, timeout, clock):
         result["state"], result["job_process_status"] = state or None, job or None
 
         findings = from_server(asset.get("job_errors"))
-        if findings or job in FAILED_STATES:
+        if findings or job in FAILED_STATES or state == "error":
             result["status"] = "rejected"
             result["findings"] = findings
             log("Miris rejected the asset: " + (", ".join(f.code for f in findings) or job))
             return
-        if state == "streamable" or job in DONE_STATES:
+        if state == "streamable":
             result["status"] = "ready"
-            log(f"asset ready ({state or job})")
+            log("asset ready (streamable)")
+            return
+        if state == "preview" or (job in DONE_STATES and not state.startswith("processing")):
+            # Uploads produce a preview first; the full streamable version is a separate
+            # "generate" step in the Miris portal (or `miris asset generate <id>`).
+            result["status"] = "preview"
+            log("preview ready; generate the streamable version from the Miris portal")
             return
         if (state, job) != last:
             log(f"processing: state={state or '?'} job={job or '?'}")
