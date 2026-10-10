@@ -29,6 +29,12 @@ def check(condition, message):
         failures.append(message)
 
 
+def use_key(key, properties):
+    # The environment route, so the smoke test never writes to the real credential vault.
+    os.environ["MIRIS_API_KEY"] = key
+    properties.forget_cached_key()
+
+
 def install():
     zip_path = os.path.join(REPO, "dist", "stream-ready-extension.zip")
     bpy.ops.extensions.package_install_files(filepath=zip_path, repo="user_default", enable_on_install=True)
@@ -152,7 +158,9 @@ def main():
     check(got == expected, f"finding codes match (missing {expected - got or '{}'}, extra {got - expected or '{}'})")
 
     print("\n[publish is blocked by errors]")
-    prefs.api_key = "never-used"
+    properties = sys.modules[f"{module}.properties"]
+    check(not hasattr(prefs, "api_key"), "no API key field in Blender preferences (it would be saved as plain text)")
+    use_key("never-used", properties)
     try:
         bpy.ops.stream_ready.publish()
         check(False, "publish refused while preflight has errors")
@@ -208,7 +216,8 @@ def main():
     print("\n[publish through injected faults]")
     st = MirisState("smoke-key", processing_polls=2, log=lambda m: None)
     server, url = serve_in_thread(st)
-    prefs.api_url, prefs.api_key = url, "smoke-key"
+    prefs.api_url = url
+    use_key("smoke-key", properties)
     settings.create_viewer_key = True
     check(bpy.ops.stream_ready.test_connection() == {"FINISHED"}, "Test Connection succeeds against the mock")
     st.fail_api, st.throttle_storage = 1, 1

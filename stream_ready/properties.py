@@ -1,23 +1,25 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-import os
-
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 
+from .core import keystore
 from .core.miris import DEFAULT_BASE_URL, DEFAULT_INPUT_TYPE
 
-API_KEY_ENV = "MIRIS_API_KEY"
+_cached = None  # (key, source); panels redraw constantly, the vault shouldn't be hit each time
 
 
-def api_key(prefs):
-    """(key, where it came from). The environment wins, so a studio can inject the key
-    from a secrets manager and never type it into Blender at all."""
-    env = os.environ.get(API_KEY_ENV, "").strip()
-    if env:
-        return env, f"${API_KEY_ENV}"
-    if prefs.api_key.strip():
-        return prefs.api_key.strip(), "preferences"
-    return "", ""
+def api_key():
+    """(key, where it came from): $MIRIS_API_KEY first, then the OS credential vault.
+    The key is never stored in Blender preferences or the .blend file."""
+    global _cached
+    if _cached is None:
+        _cached = keystore.resolve()
+    return _cached
+
+
+def forget_cached_key():
+    global _cached
+    _cached = None
 
 
 class StreamReadyPreferences(bpy.types.AddonPreferences):
@@ -29,14 +31,7 @@ class StreamReadyPreferences(bpy.types.AddonPreferences):
         description="Miris API base URL. Point it at mock/mock_miris.py to try the add-on without an account",
         default=DEFAULT_BASE_URL,
     )
-    # User preferences, not scene data: the key never travels inside a .blend someone
-    # sends to a client. Setting MIRIS_API_KEY in the environment is safer still.
-    api_key: StringProperty(
-        name="API key",
-        description=f"Miris API key (Portal > API keys). ${API_KEY_ENV} overrides this. "
-                    "Stored in Blender preferences, never in the .blend file",
-        subtype="PASSWORD",
-    )
+    # No API key property on purpose: see core/keystore.py and STREAM_READY_OT_set_api_key.
     workspace: StringProperty(
         name="Workspace",
         description="Optional workspace (customer UUID). Empty uses the key's default workspace",
@@ -61,14 +56,21 @@ class StreamReadyPreferences(bpy.types.AddonPreferences):
     def draw(self, context):
         col = self.layout.column()
         col.prop(self, "api_url")
-        _, source = api_key(self)
-        row = col.row()
-        row.enabled = source != f"${API_KEY_ENV}"
-        row.prop(self, "api_key")
-        if source == f"${API_KEY_ENV}":
-            col.label(text=f"Using the key from ${API_KEY_ENV}", icon="LOCKED")
+        _, source = api_key()
+        box = col.box()
+        if source:
+            box.label(text=f"API key stored in {source}", icon="LOCKED")
+        else:
+            vault = keystore.backend_name()
+            box.label(text=f"No API key. Saved keys go to {vault}" if vault
+                      else "No API key, and no credential vault found: set $MIRIS_API_KEY", icon="UNLOCKED")
+        row = box.row(align=True)
+        row.operator("stream_ready.set_api_key", icon="KEY_HLT")
+        sub = row.row(align=True)
+        sub.enabled = source not in ("", "$MIRIS_API_KEY")
+        sub.operator("stream_ready.clear_api_key", icon="TRASH")
+        row.operator("stream_ready.test_connection", icon="URL")
         col.prop(self, "workspace")
-        col.operator("stream_ready.test_connection", icon="URL")
         col.separator()
         col.prop(self, "streamable")
         col.prop(self, "poll_timeout")

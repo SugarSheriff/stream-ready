@@ -68,7 +68,7 @@ Only seen outside Blender (no OpenUSD available) or with hand-assembled folders.
 
 | Log says | Meaning | Fix |
 |---|---|---|
-| `401 … [invalid_api_key]` | The API key is missing, wrong, or revoked. | Use **Test Connection** in the add-on preferences. Check `$MIRIS_API_KEY` too, because it overrides the preferences. |
+| `401 … [invalid_api_key]` | The API key is missing, wrong, or revoked. | Use **Test Connection** in the add-on preferences, and **Set API Key** to replace it. Check `$MIRIS_API_KEY` too, because it overrides the saved key. If a key may have leaked, revoke it in the Miris portal and make a new one. |
 | `422 … [manifest_mismatch]` | A file changed size between export and upload completion. | Publish again. Don't edit the export folder while an upload is running. |
 | `429 SlowDown` / `503`, then `retry n/4` | Throttling or a brief outage. Retries follow `Retry-After`. | Nothing. If all retries fail, publish again later. |
 | `SignatureDoesNotMatch` / `RequestTimeTooSkewed` | Storage rejected the signed upload. A wrong system clock is the usual cause. | Sync the system clock, then publish again. |

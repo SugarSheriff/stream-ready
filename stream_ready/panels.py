@@ -48,16 +48,16 @@ class STREAM_READY_PT_main(_MirisPanel, bpy.types.Panel):
 
     def draw(self, context):
         settings = context.scene.stream_ready
-        prefs = context.preferences.addons[__package__].preferences
         layout = self.layout
         layout.prop(settings, "asset_name")
         layout.prop(settings, "tags")
         layout.row().prop(settings, "scope", expand=True)
-        _, source = api_key(prefs)
+        _, source = api_key()
         row = layout.row()
-        row.enabled = False
         row.label(text=f"API key from {source}" if source else "No API key: Export Only",
                   icon="LOCKED" if source else "UNLOCKED")
+        if not source:
+            row.operator("stream_ready.set_api_key", text="", icon="KEY_HLT")
 
 
 class STREAM_READY_PT_preflight(_MirisPanel, bpy.types.Panel):

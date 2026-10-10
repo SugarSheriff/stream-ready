@@ -8,12 +8,12 @@ import bpy
 from bpy.props import StringProperty
 
 from . import export, snapshot, state
-from .core import bundle, preflight
+from .core import bundle, keystore, preflight
 from .core.findings import ERROR, has_errors, summarize
 from .core.http import Cancelled, HttpError, Transport
 from .core.miris import MirisClient, MirisError
 from .core.publish import publish
-from .properties import api_key
+from .properties import api_key, forget_cached_key
 
 ERROR_REFERENCE = "https://docs.miris.com/preparing-assets/error-reference"
 DOCS_URL = "https://github.com/SugarSheriff/stream-ready/blob/main/TROUBLESHOOTING.md"
@@ -109,9 +109,9 @@ class STREAM_READY_OT_publish(bpy.types.Operator):
         if not getattr(bpy.app, "online_access", True):
             self.report({"ERROR"}, "Online access is off (Preferences > System > Network)")
             return {"CANCELLED"}
-        key, _ = api_key(prefs)
+        key, _ = api_key()
         if not key:
-            self.report({"ERROR"}, "No API key: set one in the add-on preferences or $MIRIS_API_KEY (or use Export Only)")
+            self.report({"ERROR"}, "No API key: Set API Key in the add-on preferences (or use Export Only)")
             return {"CANCELLED"}
         if context.mode != "OBJECT":
             # Edit-mode changes are not flushed to mesh data until you leave edit mode.
@@ -162,7 +162,7 @@ class STREAM_READY_OT_test_connection(bpy.types.Operator):
 
     def execute(self, context):
         prefs = _prefs(context)
-        key, source = api_key(prefs)
+        key, source = api_key()
         if not key:
             self.report({"ERROR"}, "No API key set")
             return {"CANCELLED"}
@@ -173,6 +173,52 @@ class STREAM_READY_OT_test_connection(bpy.types.Operator):
             self.report({"ERROR"}, f"Connection failed: {exc}")
             return {"CANCELLED"}
         self.report({"INFO"}, f"Connected to {info.get('name') or 'Miris'} (key from {source})")
+        return {"FINISHED"}
+
+
+class STREAM_READY_OT_set_api_key(bpy.types.Operator):
+    bl_idname = "stream_ready.set_api_key"
+    bl_label = "Set API Key"
+    bl_description = "Save a Miris API key in your operating system's credential vault (never in Blender files)"
+    # No REGISTER: registered operators are echoed, arguments and all, into Blender's Info
+    # log and Python console history. INTERNAL also keeps it out of the F3 search.
+    bl_options = {"INTERNAL"}
+
+    # SKIP_SAVE: Blender would otherwise remember the last value typed into this dialog.
+    key: StringProperty(name="API key", subtype="PASSWORD", options={"SKIP_SAVE"})
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "key")
+        layout.label(text=f"Saved to {keystore.backend_name() or 'nowhere: no vault found'}.", icon="LOCKED")
+        layout.label(text="Create keys in the Miris portal. Revoke there if one ever leaks.")
+
+    def execute(self, context):
+        try:
+            keystore.save(self.key)
+        except keystore.KeystoreError as exc:
+            self.report({"ERROR"}, f"Could not save the key: {exc}")
+            return {"CANCELLED"}
+        finally:
+            self.key = ""
+        forget_cached_key()
+        self.report({"INFO"}, f"API key saved to {keystore.backend_name()}")
+        return {"FINISHED"}
+
+
+class STREAM_READY_OT_clear_api_key(bpy.types.Operator):
+    bl_idname = "stream_ready.clear_api_key"
+    bl_label = "Remove"
+    bl_description = "Delete the saved API key from the credential vault"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        keystore.delete()
+        forget_cached_key()
+        self.report({"INFO"}, "API key removed")
         return {"FINISHED"}
 
 

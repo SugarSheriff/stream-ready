@@ -28,6 +28,8 @@ _classes = (
     operators.STREAM_READY_OT_publish,
     operators.STREAM_READY_OT_cancel,
     operators.STREAM_READY_OT_test_connection,
+    operators.STREAM_READY_OT_set_api_key,
+    operators.STREAM_READY_OT_clear_api_key,
     operators.STREAM_READY_OT_fix_units,
     operators.STREAM_READY_OT_select_object,
     operators.STREAM_READY_OT_open_docs,
