@@ -1,0 +1,21 @@
+schema_version = "1.0.0"
+
+id = "stream_ready"
+version = "0.1.0"
+name = "Stream Ready (for Miris)"
+tagline = "Preflight a scene, export OpenUSD, and publish it to Miris"
+maintainer = "Liam Hulsey (SugarSheriff)"
+type = "add-on"
+website = "https://github.com/SugarSheriff/stream-ready"
+
+tags = ["Import-Export", "Pipeline"]
+
+blender_version_min = "4.2.0"
+
+# Blender add-ons import bpy, so they must be GPL-compatible.
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+network = "Upload exported USD to Miris and check its processing status"
+files = "Write the exported USD and textures to a folder before upload"
+clipboard = "Copy the asset ID and an embed snippet"

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stream Ready — Blender to OpenUSD to Miris</title>
+<meta name="description" content="An unofficial Blender add-on that preflights a scene against Miris's own error codes, exports OpenUSD with the right settings, checks the output with OpenUSD, and publishes it through the Miris REST API.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="demo.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Stream Ready — Blender to OpenUSD to Miris">
+<meta property="og:description" content="Preflight against Miris's own error codes, a correctly configured OpenUSD export, and a SigV4-signed publish to the Miris REST API, all from Blender.">
+<meta property="og:url" content="https://sugarsheriff.github.io/stream-ready/">
+<meta name="twitter:card" content="summary">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="https://sugarsheriff.github.io/lookatme/#projects">← liam<span>.</span>hulsey</a>
+    <a class="navlink" href="https://github.com/SugarSheriff/stream-ready" target="_blank" rel="noopener">Source on GitHub</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Blender add-on · OpenUSD · Miris REST API</div>
+    <h1>Stream Ready</h1>
+    <p class="sub">A Blender add-on that gets a scene ready for Miris 3D streaming. It checks the scene against Miris's own error codes, exports OpenUSD with the settings Miris's guide asks for, inspects the exported files with OpenUSD, and publishes them through the Miris API, then watches until the asset is streamable.</p>
+    <div class="flow" aria-label="Pipeline: Blender scene, preflight, USD export, OpenUSD check, Miris API, streamable">
+      <span>Blender scene</span><i></i><span>Preflight</span><i></i><span>USD export</span><i></i><span>OpenUSD check</span><i></i><span>Miris API</span><i></i><span>Streamable</span>
+    </div>
+    <p class="disclaimer">Unofficial. A personal project built from Miris's public docs and OpenAPI spec. Not affiliated with or endorsed by Miris.</p>
+  </div>
+</header>
+
+<section id="simulate">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="section-num">01 — Break it on purpose</span>
+      <h2>Publish simulation</h2>
+      <p class="lede">The panel on the left mirrors the add-on's <b>Miris</b> sidebar tab. Toggle a problem and press Publish. The codes, messages, endpoints, and retry rules match the real add-on and the mock server in the repo. Turn on a scene problem plus <em>Skip local checks</em> to watch the server reject the asset with the same code preflight would have shown.</p>
+    </div>
+
+    <div class="sim">
+      <div class="bpanel" aria-label="Blender sidebar mock-up">
+        <div class="bpanel-tab">Stream Ready</div>
+        <div class="bfield"><label>Asset name</label><span class="binput">oak_chair</span></div>
+        <div class="bfield"><label>Tags</label><span class="binput">chair, oak, v2</span></div>
+        <div class="bendpoint" id="keyline">🔒 API key from $MIRIS_API_KEY</div>
+
+        <fieldset>
+          <legend>Scene problems</legend>
+          <label class="tog"><input type="checkbox" data-fault="units"> Scene in centimeters (scale 0.01)</label>
+          <label class="tog"><input type="checkbox" data-fault="tiny"> Modeled in mm, exported as m</label>
+          <label class="tog"><input type="checkbox" data-fault="missing"> Texture file missing</label>
+          <label class="tog"><input type="checkbox" data-fault="hidden"> Mesh disabled for render</label>
+          <label class="tog"><input type="checkbox" data-fault="procedural"> Noise Texture in material</label>
+          <label class="tog"><input type="checkbox" data-fault="tint"> HDRI intensity tinted</label>
+        </fieldset>
+        <fieldset>
+          <legend>Network problems</legend>
+          <label class="tog"><input type="checkbox" data-fault="s503"> 503 on reserve</label>
+          <label class="tog"><input type="checkbox" data-fault="s429"> Storage throttles (429)</label>
+          <label class="tog"><input type="checkbox" data-fault="changed"> File changes mid-upload</label>
+          <label class="tog"><input type="checkbox" data-fault="skip"> Skip local checks</label>
+        </fieldset>
+
+        <div class="bactions">
+          <button class="bbtn" id="btn-preflight" type="button">✓ Run Preflight</button>
+          <button class="bbtn primary" id="btn-publish" type="button">⇪ Publish to Miris</button>
+        </div>
+        <div class="bfindings" id="findings" aria-live="polite"></div>
+      </div>
+
+      <div class="trace">
+        <ol class="rail" id="rail">
+          <li data-stage="preflight">Preflight</li>
+          <li data-stage="export">USD export</li>
+          <li data-stage="check">OpenUSD check</li>
+          <li data-stage="reserve">Reserve</li>
+          <li data-stage="upload">Upload</li>
+          <li data-stage="complete">Complete</li>
+          <li data-stage="process">Process</li>
+          <li data-stage="share">Share</li>
+        </ol>
+        <div class="console" id="console" role="log" aria-live="polite">
+          <div class="line dim">Toggle a problem, then press Publish to Miris.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="checklist">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="section-num">02 — From checklist to button</span>
+      <h2>What the add-on does for you</h2>
+      <p class="lede">Miris's <a href="https://docs.miris.com/preparing-assets/blender" target="_blank" rel="noopener">Blender guide</a> is clear, but it's a long manual checklist. Here's each step, and what happens to it.</p>
+    </div>
+    <div class="compare" role="table" aria-label="Guide steps compared with add-on behavior">
+      <div class="crow chead" role="row"><span role="columnheader">The guide says</span><span role="columnheader">Stream Ready</span></div>
+      <div class="crow" role="row"><span role="cell">Set Metric, Unit Scale 1, Meters</span><span role="cell"><b class="tag fix">checked</b> One-click fix if not</span></div>
+      <div class="crow" role="row"><span role="cell">Make paths relative, unpack resources</span><span role="cell"><b class="tag auto">automatic</b> Export copies textures to <code>textures/</code> and writes relative paths. Absolute paths in the output block publish.</span></div>
+      <div class="crow" role="row"><span role="cell">Build Image Texture → Principled BSDF materials</span><span role="cell"><b class="tag fix">checked</b> Other shaders and procedural nodes are flagged per material, with Select</span></div>
+      <div class="crow" role="row"><span role="cell">Two labeled Multiply nodes, export intensity × 1562, equal RGB</span><span role="cell"><b class="tag auto">automatic</b> Intensity × 1562 is written straight into the exported DomeLight. Your viewport lighting is untouched.</span></div>
+      <div class="crow" role="row"><span role="cell">Enable Relative Paths, Convert World Material, USD Preview Surface, Export Textures: New path</span><span role="cell"><b class="tag auto">automatic</b> Built from the options this Blender's exporter actually accepts</span></div>
+      <div class="crow" role="row"><span role="cell">Rename .usdc to .usd</span><span role="cell"><b class="tag auto">automatic</b></span></div>
+      <div class="crow" role="row"><span role="cell">Verify <code>metersPerUnit = 1</code> in the .usda</span><span role="cell"><b class="tag auto">automatic</b> Read, and authored if missing, with OpenUSD</span></div>
+      <div class="crow" role="row"><span role="cell">Upload the complete folder</span><span role="cell"><b class="tag auto">automatic</b> SigV4-signed, multipart for big files, verified by a size manifest</span></div>
+      <div class="crow" role="row"><span role="cell">Look up the error code if processing fails</span><span role="cell"><b class="tag fix">checked</b> Same codes caught before upload, and server errors shown in the panel</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="lighting">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="section-num">03 — Found by the tests</span>
+      <h2>The ×1562 that never reached the file</h2>
+      <p class="lede">The guide calibrates HDRI lighting by setting an "Export Light Intensity" node to Blender intensity × 1562. The headless Blender test exported that setup and read the result back with OpenUSD. With the export node set but not the one wired into the Background, Blender 4.2 wrote <code>DomeLight color = (1, 1, 1)</code>. Nothing errors. The calibration just silently never makes it into the file.</p>
+    </div>
+    <div class="domes">
+      <figure class="dome dark">
+        <div class="orb" aria-hidden="true"></div>
+        <figcaption><code>inputs:color = (1, 1, 1)</code><span>what Blender wrote</span></figcaption>
+      </figure>
+      <figure class="dome lit">
+        <div class="orb" aria-hidden="true"></div>
+        <figcaption><code>inputs:color = (1562, 1562, 1562)</code><span>what the add-on writes after export</span></figcaption>
+      </figure>
+    </div>
+    <p class="lede note-under">So the add-on stopped relying on node wiring. It reads the intensity, exports, then sets the DomeLight color itself. <code>tests/blender_smoke.py</code> asserts the value in the actual exported USD.</p>
+  </div>
+</section>
+
+<section id="repo">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="section-num">04 — What's in the repo</span>
+      <h2>The real building blocks</h2>
+    </div>
+    <div class="cards">
+      <a class="card" href="https://github.com/SugarSheriff/stream-ready/tree/main/stream_ready" target="_blank" rel="noopener">
+        <span class="card-tag">Python · bpy</span>
+        <h3>The add-on</h3>
+        <p>Sidebar panel, one-click fixes, and Export Only for people without an API key. Uploads run on a worker thread, so Blender never freezes, and Cancel marks the upload canceled on Miris.</p>
+      </a>
+      <a class="card" href="https://github.com/SugarSheriff/stream-ready/blob/main/stream_ready/core/bundle.py" target="_blank" rel="noopener">
+        <span class="card-tag">Python · OpenUSD</span>
+        <h3>Folder check</h3>
+        <p>Opens the exported stage with <code>pxr</code>, which ships inside Blender. It resolves every dependency, evaluates visibility and purpose, and measures world bounds × <code>metersPerUnit</code> against Miris's 1 cm³–100 km³ limit.</p>
+      </a>
+      <a class="card" href="https://github.com/SugarSheriff/stream-ready/blob/main/stream_ready/core/sigv4.py" target="_blank" rel="noopener">
+        <span class="card-tag">Python · stdlib</span>
+        <h3>SigV4 + multipart</h3>
+        <p>Miris issues temporary storage credentials, so the client signs its own uploads. No boto3. Tested byte for byte against AWS's published S3 examples, and an interrupted multipart upload is aborted.</p>
+      </a>
+      <a class="card" href="https://github.com/SugarSheriff/stream-ready/blob/main/stream_ready/core/miris.py" target="_blank" rel="noopener">
+        <span class="card-tag">Python · REST</span>
+        <h3>Miris client</h3>
+        <p>Built from Miris's OpenAPI spec: reserve, upload status with a size manifest, job polling, and asset-scoped viewer keys. Errors are parsed as problem+json, and the API key is never sent to the storage host.</p>
+      </a>
+      <a class="card" href="https://github.com/SugarSheriff/stream-ready/blob/main/mock/mock_miris.py" target="_blank" rel="noopener">
+        <span class="card-tag">Python · http.server</span>
+        <h3>Mock Miris</h3>
+        <p>A local API and S3 storage that recompute every signature, enforce the manifest, and run the same checks as "processing", reporting Miris's error keys. It injects 503s and 429s on request.</p>
+      </a>
+      <a class="card" href="https://github.com/SugarSheriff/stream-ready#verified-vs-assumed" target="_blank" rel="noopener">
+        <span class="card-tag">Docs</span>
+        <h3>Verified vs. assumed</h3>
+        <p>The README separates what's confirmed (spec, test vectors, real Blender exports) from the guesses the public docs leave open, so a first live run knows exactly what to check.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">Built by <a href="https://sugarsheriff.github.io/lookatme/">Liam Hulsey</a> · Unofficial, not affiliated with Miris · Blender add-on licensed GPL-3.0-or-later</div>
+</footer>
+
+<script src="demo.js"></script>
+</body>
+</html>
